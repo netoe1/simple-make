@@ -44,47 +44,139 @@
 
 # 4. ISENÇÃO DE GARANTIA
 # O SOFTWARE É FORNECIDO "COMO ESTÁ", SEM GARANTIA DE QUALQUER TIPO, EXPRESSA OU IMPLÍCITA, INCLUINDO, MAS NÃO SE LIMITANDO ÀS GARANTIAS DE COMERCIALIZAÇÃO, ADEQUAÇÃO A UM PROPÓSITO ESPECÍFICO E NÃO VIOLAÇÃO. EM NENHUM CASO OS AUTORES OU DETENTORES DOS DIREITOS AUTORAIS SERÃO RESPONSÁVEIS POR QUALQUER RECLAMAÇÃO, DANOS OU OUTRA RESPONSABILIDADE, SEJA EM UMA AÇÃO DE CONTRATO, ATO ILÍCITO OU DE OUTRA FORMA, DECORRENTE DE, FORA DE OU EM CONEXÃO COM O SOFTWARE OU O USO OU OUTRAS NEGOCIAÇÕES NO SOFTWARE.
+class BatGenerator:
+    def __init__(self, variaveis: dict, targets: dict):
+        self.variaveis = variaveis
+        self.targets = targets
 
-from pathlib import Path
-import re
-import sys
-from classes.BatGenerator import BatGenerator;
-from classes.MakefileParser import MakefileParser
+    def gerar(self) -> str:
+        linhas = []
 
-MAKEFILE_PADRAO = Path("Makefile")
-BAT_SAIDA_PADRAO = Path("simple-make.bat")
+        linhas.extend(self._cabecalho())
+        linhas.extend(self._variaveis())
+        linhas.extend(self._validacao_argumento())
+        linhas.extend(self._roteamento_targets())
+        linhas.extend(self._targets())
+        linhas.extend(self._exit())
 
-def main():
-    caminho_makefile = Path(sys.argv[1]) if len(sys.argv) > 1 else MAKEFILE_PADRAO
-    caminho_saida = Path(sys.argv[2]) if len(sys.argv) > 2 else BAT_SAIDA_PADRAO
+        return "\n".join(linhas)
 
-    if not caminho_makefile.exists():
-        print(f"Erro: Makefile nao encontrado: {caminho_makefile}")
-        sys.exit(1)
+    def _cabecalho(self):
+        return [
+            "@echo off",
+            "setlocal",
+            "",
+            ":: Arquivo gerado automaticamente pelo simple-make",
+            ""
+        ]
 
-    try:
-        parser = MakefileParser(caminho_makefile)
-        variaveis, targets = parser.parse()
+    def _variaveis(self):
+        linhas = []
 
-        if not targets:
-            print("Erro: nenhum target encontrado no Makefile.")
-            sys.exit(1)
+        if not self.variaveis:
+            return linhas
 
-        gerador = BatGenerator(variaveis, targets)
-        conteudo_bat = gerador.gerar()
+        linhas.append(":: Variaveis do Makefile")
 
-        caminho_saida.write_text(conteudo_bat, encoding="utf-8")
+        for nome, valor in self.variaveis.items():
+            linhas.append(f'set "{nome}={valor}"')
 
-        print(f"Arquivo gerado: {caminho_saida}")
-        print("Targets encontrados:")
+        linhas.append("")
+        return linhas
 
-        for target in targets:
-            print(f"  - {target}")
+    def _validacao_argumento(self):
+        linhas = [
+            ":: Verifica se foi informado um target",
+            'if "%~1"=="" (',
+            "    echo Uso: simple-make.bat TARGET",
+            "    echo.",
+            "    echo Targets disponiveis:"
+        ]
 
-    except SyntaxError as erro:
-        print(f"Erro de sintaxe: {erro}")
-        sys.exit(1)
+        for target in self.targets:
+            linhas.append(f"    echo   {target}")
 
+        linhas.extend([
+            "    goto exit",
+            ")",
+            ""
+        ])
 
-if __name__ == "__main__":
-    main()
+        return linhas
+
+    def _roteamento_targets(self):
+        linhas = [
+            ":: Roteamento de targets"
+        ]
+
+        for target in self.targets:
+            label = self._normalizar_label(target)
+            linhas.append(f'if /I "%~1"=="{target}" goto {label}')
+
+        linhas.extend([
+            "",
+            "echo Target invalido: %~1",
+            "goto exit",
+            ""
+        ])
+
+        return linhas
+
+    def _targets(self):
+        linhas = [
+            ":: Targets convertidos do Makefile"
+        ]
+
+        for nome_target, dados_target in self.targets.items():
+            label = self._normalizar_label(nome_target)
+            dependencias = dados_target["dependencias"]
+            comandos = dados_target["comandos"]
+
+            linhas.append(f":{label}")
+
+            for dependencia in dependencias:
+                if dependencia in self.targets:
+                    label_dependencia = self._normalizar_label(dependencia)
+                    linhas.append(f"    call :{label_dependencia}")
+
+            if comandos:
+                for comando in comandos:
+                    comando_convertido = self._converter_comando(comando)
+                    linhas.append(f"    {comando_convertido}")
+            else:
+                linhas.append("    rem Target sem comandos")
+
+            linhas.append("goto exit")
+            linhas.append("")
+
+        return linhas
+
+    def _exit(self):
+        return [
+            ":exit",
+            "echo simple-make[]: exiting.",
+            "endlocal"
+        ]
+
+    def _converter_comando(self, comando: str) -> str:
+        comando = self._converter_variaveis_parenteses(comando)
+        comando = self._converter_variaveis_chaves(comando)
+        return comando
+
+    def _converter_variaveis_parenteses(self, comando: str) -> str:
+        return re.sub(
+            r"\$\(([A-Za-z_][A-Za-z0-9_]*)\)",
+            r"%\1%",
+            comando
+        )
+
+    def _converter_variaveis_chaves(self, comando: str) -> str:
+        return re.sub(
+            r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}",
+            r"%\1%",
+            comando
+        )
+
+    def _normalizar_label(self, target: str) -> str:
+        label = re.sub(r"[^A-Za-z0-9_]", "_", target)
+        return f"target_{label}"
